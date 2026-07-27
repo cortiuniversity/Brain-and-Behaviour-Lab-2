@@ -148,6 +148,7 @@
   .theme-toggle{margin-left:auto;width:auto;flex:none;background:transparent;border:1.5px solid var(--line);
     border-radius:10px;padding:8px 10px;font-size:1rem;line-height:1;cursor:pointer;color:var(--ink)}
   .theme-toggle:hover{border-color:var(--signal)}
+  .tutor-foot{margin-top:16px;border-top:1px dashed var(--line);padding-top:14px}
   .card{
     background:var(--card);border:1px solid var(--line);border-radius:16px;
     box-shadow:var(--shadow);padding:20px;
@@ -365,6 +366,9 @@
       </div>
       <button class="btn-ghost" style="margin-top:10px" onclick="resetAll()">Reset all (new class)</button>
     </div>
+    <div class="tutor-foot">
+      <button id="themeToggleT" class="btn-ghost" onclick="toggleTheme()">🌙 Switch to dark mode</button>
+    </div>
   </section>
 </div>
 <div id="credit" style="display:none;text-align:center;font-size:.72rem;color:var(--muted);padding:12px 0 6px;letter-spacing:.02em">developed for Emily Corti</div>
@@ -400,8 +404,9 @@ function toggleTheme(){
   updateThemeIcon();
 }
 function updateThemeIcon(){
-  const b=$('themeToggle'); if(!b) return;
-  b.textContent = (document.documentElement.getAttribute('data-theme')==='dark') ? '☀️' : '🌙';
+  const dark = (document.documentElement.getAttribute('data-theme')==='dark');
+  const b=$('themeToggle'); if(b) b.textContent = dark ? '☀️' : '🌙';
+  const t=$('themeToggleT'); if(t) t.textContent = dark ? '☀️ Switch to light mode' : '🌙 Switch to dark mode';
 }
 updateThemeIcon();
 function showTutor(){ if(!ok) return; createRoom(); }
