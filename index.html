@@ -313,6 +313,11 @@
       <div id="chartAvg" class="bars"></div>
       <div id="talkpoints"></div>
       <button class="btn-signal" id="advanceBtn" style="margin-top:16px" onclick="downloadAndNext()">Next task →</button>
+      <button class="btn-ghost" id="resetTaskBtn" style="margin-top:10px" onclick="resetTask()">↻ Reset task (re-run this one)</button>
+      <div class="btn-row" style="margin-top:10px">
+        <select id="jumpSelect" style="flex:1"></select>
+        <button class="btn-ghost" style="flex:none;width:auto" onclick="jumpToTask()">Jump to task →</button>
+      </div>
       <button class="btn-ghost" style="margin-top:10px" onclick="resetAll()">Reset all (new class)</button>
     </div>
   </section>
@@ -475,6 +480,10 @@ function buildTaskMenu(){
   };
   sel.onchange();
 }
+function buildJumpMenu(){
+  const sel=$('jumpSelect'); if(!sel) return;
+  sel.innerHTML = TASKS.map((t,i)=>`<option value="${t.id}">${i+1}. ${t.label}</option>`).join('');
+}
 /* ================================================================== */
 /* TUTOR SIDE                                                          */
 /* ================================================================== */
@@ -497,6 +506,7 @@ function createRoom(){
   $('qr').innerHTML='';
   try{ new QRCode($('qr'),{text:url,width:150,height:150,colorDark:'#0d1b2a'}); }catch(e){}
   buildTaskMenu();
+  buildJumpMenu();
   // live meta + history
   tutorRef.child('meta').on('value', s=>{ tutorRender(s.val()||{}); });
   tutorRef.child('history').on('value', s=>{ HIST = s.val()||{}; if(lastMeta.state==='done') renderResults(lastMeta); });
@@ -511,7 +521,7 @@ function createRoom(){
     if(lastMeta.state==='running') tutorRender(lastMeta); // refresh skip-button label with current name
   });
 }
-let TP={}, lastMeta={}, HIST={}, recorded={}, pingSeen={};
+let TP={}, lastMeta={}, HIST={}, recorded={}, pingSeen={}, prevTutorState=null;
 /* --- tutor lobby tester board --- */
 function renderRoster(){
   const el=$('tRoster'); if(!el) return;
@@ -563,9 +573,13 @@ function tutorRender(meta){
     hide('tLobby'); hide('tRunning'); show('tResults');
     maybeRecord(meta);
     renderResults(meta);
+    // default the jump picker to the current task — only on entry, so it doesn't
+    // fight the tutor if they change it while sitting on the results screen
+    if(prevTutorState!=='done'){ const js=$('jumpSelect'); if(js && meta.taskId) js.value=meta.taskId; }
   } else { // lobby
     show('tLobby'); hide('tRunning'); hide('tResults');
   }
+  prevTutorState = st;
 }
 function startRelay(){
   const task = taskById($('taskSelect').value);
@@ -613,9 +627,11 @@ function skipCurrent(){
     }
   });
 }
-function newRound(){
-  const doneId = lastMeta.taskId;
-  // keep participants, clear their taps/skips, back to lobby with same code (history preserved)
+/* Shared: keep the same class/room, clear this round's taps, drop back to the
+   lobby queued on `taskId`. History is preserved (a re-run of the same task
+   overwrites that task's history entry when it next completes). */
+function goToTask(taskId){
+  if(!tutorRef) return;
   const updates={};
   Object.keys(TP).forEach(k=>{
     updates['p/'+k+'/reactionMs']=null;
@@ -625,10 +641,24 @@ function newRound(){
   });
   tutorRef.update(updates);
   tutorRef.child('meta').update({state:'lobby',currentTurn:0,startedAt:0,finishedAt:0});
-  // auto-advance the picker to the next task in the sequence
-  const idx = doneId ? TASKS.findIndex(t=>t.id===doneId) : -1;
-  if(idx>=0 && idx+1<TASKS.length){ $('taskSelect').value = TASKS[idx+1].id; $('taskSelect').onchange(); }
+  if(taskId){ $('taskSelect').value = taskId; $('taskSelect').onchange(); }
   show('tLobby'); hide('tRunning'); hide('tResults');
+}
+function newRound(){
+  // auto-advance to the next task in the sequence
+  const doneId = lastMeta.taskId;
+  const idx = doneId ? TASKS.findIndex(t=>t.id===doneId) : -1;
+  const nextId = (idx>=0 && idx+1<TASKS.length) ? TASKS[idx+1].id : doneId;
+  goToTask(nextId);
+}
+function resetTask(){
+  // re-run the SAME task that just finished (a redo, not an advance)
+  goToTask(lastMeta.taskId);
+}
+function jumpToTask(){
+  // jump straight to any chosen task's lobby
+  const sel=$('jumpSelect'); if(!sel) return;
+  goToTask(sel.value);
 }
 function resetAll(){
   if(tutorRef) tutorRef.remove();
