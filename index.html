@@ -71,6 +71,17 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+  /* set the theme before first paint so there's no flash of the wrong mode.
+     stored choice wins; otherwise follow the device's system setting. */
+  (function(){
+    try{
+      var s=localStorage.getItem('nr_theme');
+      var d=s || ((window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark':'light');
+      document.documentElement.setAttribute('data-theme', d);
+    }catch(e){ document.documentElement.setAttribute('data-theme','light'); }
+  })();
+</script>
 <style>
   :root{
     --ink:#0d1b2a;          /* deep axon navy */
@@ -86,6 +97,36 @@
     --good:#1a9e5f;
     --bad:#d23a2b;
     --shadow:0 6px 22px rgba(13,27,42,.10);
+    /* semantic surfaces — remapped in dark mode so hard-coded panels follow the theme */
+    --field-bg:#ffffff;   /* inputs / selects */
+    --panel:#ffffff;      /* roster rows */
+    --panel2:#f7f9fc;     /* result stat tiles */
+    --neuron-bg:#eef1f6;  /* idle neuron dot */
+    --track-bg:#eef1f6;   /* bar-chart track */
+    --solid:var(--ink);   /* solid dark buttons (primary / choice) */
+    --solid-text:#ffffff;
+  }
+  :root[data-theme="dark"]{
+    --ink:#e7edf7;
+    --paper:#0a111f;
+    --card:#141d30;
+    --line:#2a3750;
+    --muted:#9db0c8;
+    --signal:#1ec9ba;
+    --signal-deep:#3ad9cb;
+    --fire:#ff6b4a;
+    --fire-deep:#ff502d;
+    --spent:#5d6d84;
+    --good:#40cf87;
+    --bad:#ff6a5a;
+    --shadow:0 6px 22px rgba(0,0,0,.5);
+    --field-bg:#0f1930;
+    --panel:#1a2439;
+    --panel2:#172033;
+    --neuron-bg:#1c2841;
+    --track-bg:#1c2841;
+    --solid:#243252;
+    --solid-text:#eaf1fb;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
@@ -104,6 +145,9 @@
     font-weight:800;margin:0;
   }
   header.brand small{color:var(--muted);font-weight:600;letter-spacing:.02em;font-size:.72rem;display:block;margin-top:1px}
+  .theme-toggle{margin-left:auto;width:auto;flex:none;background:transparent;border:1.5px solid var(--line);
+    border-radius:10px;padding:8px 10px;font-size:1rem;line-height:1;cursor:pointer;color:var(--ink)}
+  .theme-toggle:hover{border-color:var(--signal)}
   .card{
     background:var(--card);border:1px solid var(--line);border-radius:16px;
     box-shadow:var(--shadow);padding:20px;
@@ -113,7 +157,7 @@
   label{display:block;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:14px 0 6px}
   input, select{
     width:100%;padding:14px;font-size:1.05rem;border:1.5px solid var(--line);
-    border-radius:11px;background:#fff;color:var(--ink);font-family:inherit;
+    border-radius:11px;background:var(--field-bg);color:var(--ink);font-family:inherit;
   }
   input:focus,select:focus{outline:none;border-color:var(--signal)}
   input.code{text-transform:uppercase;letter-spacing:.4em;text-align:center;font-weight:800;font-size:1.5rem}
@@ -123,7 +167,7 @@
   }
   button:active{transform:translateY(1px)}
   button:disabled{filter:grayscale(.5) opacity(.6);cursor:default}
-  .btn-primary{background:var(--ink);color:#fff}
+  .btn-primary{background:var(--solid);color:var(--solid-text)}
   .btn-signal{background:var(--signal);color:#fff}
   .btn-ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
   .btn-row{display:flex;gap:10px}
@@ -142,7 +186,7 @@
   .chain{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
   .neuron{
     width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-    font-size:.78rem;font-weight:800;background:#eef1f6;color:var(--muted);
+    font-size:.78rem;font-weight:800;background:var(--neuron-bg);color:var(--muted);
     border:2px solid var(--line);transition:all .18s ease;position:relative;
   }
   .neuron.spent{background:var(--spent);color:#fff;border-color:var(--spent)}
@@ -153,11 +197,11 @@
   .rosterinfo{font-size:.82rem;color:var(--muted);font-weight:700;margin:6px 0 4px}
   #tRoster{display:flex;flex-direction:column;gap:5px;margin:8px 0 14px;max-height:260px;overflow:auto}
   .rrow{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px;
-    padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:#fff}
+    padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:var(--panel)}
   .rrow.flash{animation:rflash .8s ease}
   @keyframes rflash{
     0%{background:rgba(0,180,166,.4);box-shadow:0 0 0 4px rgba(0,180,166,.35)}
-    100%{background:#fff;box-shadow:none}}
+    100%{background:var(--panel);box-shadow:none}}
   .rdot{width:12px;height:12px;border-radius:50%;flex:none}
   .rdot.on{background:var(--good);box-shadow:0 0 0 3px rgba(26,158,95,.18)}
   .rdot.off{background:var(--spent)}
@@ -211,7 +255,7 @@
   @keyframes pop{from{transform:scale(.9)}to{transform:scale(1)}}
   .tapzone small{font-size:.85rem;font-weight:700;opacity:.9;letter-spacing:.02em}
   .choice-row{display:flex;gap:16px;width:min(88vw,360px)}
-  .choice-btn{flex:1;height:150px;border-radius:20px;font-size:1.4rem;background:var(--ink);color:#fff;
+  .choice-btn{flex:1;height:150px;border-radius:20px;font-size:1.4rem;background:var(--solid);color:var(--solid-text);
     display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow)}
   .choice-btn.flash-bad{animation:shake .3s}
   @keyframes shake{25%{transform:translateX(-7px)}75%{transform:translateX(7px)}}
@@ -222,7 +266,7 @@
   .youdone .sub{font-size:1rem;color:var(--muted);display:block;margin-top:2px}
   /* results */
   .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:4px 0 14px}
-  .stat{background:#f7f9fc;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
   .stat .v{font-size:1.6rem;font-weight:900;font-variant-numeric:tabular-nums}
   .stat .k{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-top:2px}
   .footnote{font-size:.78rem;color:var(--muted);line-height:1.5;margin-top:12px;border-top:1px dashed var(--line);padding-top:12px}
@@ -231,7 +275,7 @@
   .bars{display:flex;flex-direction:column;gap:6px}
   .bar-row{display:grid;grid-template-columns:76px 1fr auto;align-items:center;gap:8px}
   .bar-label{font-size:.78rem;font-weight:700;color:var(--ink);text-align:right;line-height:1.1}
-  .bar-track{background:#eef1f6;border-radius:6px;height:20px;overflow:hidden}
+  .bar-track{background:var(--track-bg);border-radius:6px;height:20px;overflow:hidden}
   .bar-fill{height:100%;border-radius:6px;min-width:3px;transition:width .5s ease}
   .bar-val{font-size:.82rem;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink);min-width:52px;text-align:right}
   .bar-empty{font-size:.8rem;color:var(--muted);padding:6px 0}
@@ -249,6 +293,7 @@
       <h1>Neural Relay</h1>
       <small>Brain &amp; Behaviour · Lab 2</small>
     </div>
+    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
   </header>
   <!-- ===================== LANDING ===================== -->
   <section id="landing" class="card">
@@ -346,6 +391,19 @@ const hide = id => $(id).classList.add('hidden');
 const sections = ['landing','join','play','tutor'];
 function only(id){ sections.forEach(s=>hide(s)); show(id); const c=$('credit'); if(c) c.style.display=(id==='join'||id==='play')?'block':'none'; }
 function backToLanding(){ only('landing'); }
+/* --- dark / light theme toggle (the early head script set the initial value) --- */
+function toggleTheme(){
+  const cur = document.documentElement.getAttribute('data-theme')==='dark' ? 'dark':'light';
+  const next = cur==='dark' ? 'light':'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try{ localStorage.setItem('nr_theme', next); }catch(e){}
+  updateThemeIcon();
+}
+function updateThemeIcon(){
+  const b=$('themeToggle'); if(!b) return;
+  b.textContent = (document.documentElement.getAttribute('data-theme')==='dark') ? '☀️' : '🌙';
+}
+updateThemeIcon();
 function showTutor(){ if(!ok) return; createRoom(); }
 function showJoin(){
   if(!ok) return;
@@ -677,7 +735,7 @@ function maybeRecord(meta){
   recorded[meta.startedAt] = true;
   const sum = rts.reduce((a,b)=>a+b.reactionMs,0);
   const parts = {};
-  arr.forEach((x,i)=>{ parts[i] = {name:x.name||'', reactionMs:(typeof x.reactionMs==='number'?x.reactionMs:null)}; });
+  arr.forEach((x,i)=>{ parts[i] = {name:x.name||'', cid:x.cid||'', reactionMs:(typeof x.reactionMs==='number'?x.reactionMs:null)}; });
   const t = taskById(meta.taskId);
   tutorRef.child('history/'+meta.taskId).set({
     order: meta.taskN||taskN(meta.taskId),
@@ -741,7 +799,7 @@ function renderTalk(meta){
   if(H.pre && H.base) pts.push({title:'Anticipation & practice',
     body:`Baseline came out ${phraseDelta(H.pre.avg,H.base.avg)} than Pre-baseline. Two things drive that: anticipation (seeing the signal approach lets the brain pre-load its response before it lands) and a practice effect (Baseline is their second run, so they're warmed up). Because Baseline always follows Pre-baseline, the two are confounded here — worth naming to students rather than claiming it's all anticipation.`});
   if(H.base && H.base2) pts.push({title:'Sound vs light',
-    body:`Reacting to a beep (Baseline sound) versus a visual cue (Baseline) came out ${phraseDelta(H.base.avg,H.base2.avg)}. Sound usually wins: hair-cell transduction is near-instant, while the retina runs several layers of processing before the signal even leaves the eye — so vision loses at the receptor, not the wiring.`});
+    body:`Reacting to the beep came out ${phraseDelta(H.base.avg,H.base2.avg)} than the visual cue. The textbook expectation is that sound wins by roughly 30–60 ms — hair cells transduce almost instantly, while the retina runs several processing layers before the signal even leaves the eye. But on phones in a room you'll often see that advantage shrink or flip, and that mismatch is the real teaching point: the measurement isn't clean. The beep carries the phone's audio-output lag (the device has to generate the sound and push it through its speaker before it reaches the ear), volume and background noise differ seat to seat, and with eyes off the screen students are less primed than when they can watch the panel. Any of those can swamp the ~40 ms receptor difference. So a slower sound result isn't a wrong answer — it shows that method and conditions shape data as much as physiology does. Good question to put to the class: what would we need to control (a quiet room, calibrated volume, wired output, one person at a time) to actually see the effect the textbook predicts?`});
   if(H.base && H.rl) pts.push({title:'Choice cost',
     body:`Adding a left/right decision made people ${phraseDelta(H.base.avg,H.rl.avg)}. That gap is the decision itself — picking between two responses is processing on top of simply detecting the signal.`});
   if(H.base && H.d7) pts.push({title:'Cognitive load',
@@ -791,6 +849,44 @@ async function downloadXLSX(){
       rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF00B4A6'}}] });
     ws.addConditionalFormatting({ ref:`E2:E${last}`,
       rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF3A63C9'}}] });
+
+    // -------- Sheet 2: per-participant reaction times (one row per person) --------
+    // Match the same person across tasks by their client id (falls back to name).
+    const people = {};   // key -> { name, vals:{ order: rtMs } }
+    hist.forEach(h=>{
+      const parts = h.participants || {};
+      Object.keys(parts).forEach(k=>{
+        const p = parts[k]; if(!p) return;
+        const key = p.cid || ('name:'+((p.name||'').toLowerCase())+':'+k);
+        if(!people[key]) people[key] = {name:p.name||'(no name)', vals:{}};
+        if(p.name && (people[key].name==='(no name)')) people[key].name=p.name;
+        if(typeof p.reactionMs==='number') people[key].vals[h.order]=p.reactionMs;
+      });
+    });
+    const rows = Object.values(people).sort((a,b)=> a.name.localeCompare(b.name));
+    const ws2 = wb.addWorksheet('By participant');
+    const cols = [{header:'Participant', key:'name', width:22}];
+    hist.forEach(h=> cols.push({header:`${h.order}. ${h.short||h.label}`, key:'t'+h.order, width:13}));
+    cols.push({header:'Mean (ms)', key:'mean', width:12});
+    ws2.columns = cols;
+    ws2.getRow(1).font = {bold:true};
+    ws2.getRow(1).alignment = {vertical:'middle', wrapText:true};
+    rows.forEach(pers=>{
+      const r = {name:pers.name}; let sum=0, n=0;
+      hist.forEach(h=>{ const v=pers.vals[h.order];
+        if(typeof v==='number'){ r['t'+h.order]=Math.round(v); sum+=v; n++; } });
+      r.mean = n ? Math.round(sum/n) : '';
+      ws2.addRow(r);
+    });
+    // per-task data bars down each task column, coloured to match the summary chart
+    const last2 = rows.length + 1;
+    hist.forEach((h,i)=>{
+      const L = ws2.getColumn(2+i).letter;   // col 1 = name, tasks start at 2
+      const argb = 'FF' + ((TASK_COLORS[h.order]||'#00b4a6').replace('#','').toUpperCase());
+      if(last2>1) ws2.addConditionalFormatting({ ref:`${L}2:${L}${last2}`,
+        rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb}}] });
+    });
+
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const a = document.createElement('a');
