@@ -3,7 +3,6 @@
   NEURAL RELAY — a whole-class, no-touch neural transmission demo
   For: Brain & Behaviour, Lab 2 (Neural Transmission)
   ============================================================================
-
   HOW IT WORKS
   - Each phone shows a giant TAP button ONLY when it is that person's turn.
   - The "signal" travels through the class one person at a time (like the
@@ -13,7 +12,6 @@
   - Each person's reaction time is measured LOCALLY (screen-lights-up -> tap),
     so the number has no network lag in it. The app reports the sum of those
     clean reaction times as the "neural" total, plus the wall-clock total.
-
   ============================================================================
   ONE-TIME SETUP (about 10 minutes)
   ============================================================================
@@ -21,7 +19,8 @@
      plan is plenty). Name it whatever.
   2. In the left menu: Build -> Realtime Database -> Create Database.
        - Pick a location (asia-southeast1 is closest to Perth).
-       - Start in TEST MODE. (Fine for class; see the note at the bottom.)
+       - Start in TEST MODE. (Fine for testing; see the SECURITY note at the
+         bottom of this file before you hand a link to a real class.)
   3. Project settings (gear icon) -> scroll to "Your apps" -> click the </>
      (Web) icon -> register an app -> copy the firebaseConfig object.
   4. Paste those values into the CONFIG block just below.
@@ -32,6 +31,25 @@
      Settings -> Pages -> deploy from main branch. Your class link is the
      Pages URL. (Or test locally first by just opening the file.)
   ============================================================================
+  PHANTOM-LOGIN FIXES (added)
+  ============================================================================
+  Symptom was extra "neurons" in the chain with no live phone behind them, so
+  the pulse reached a slot nobody could fire and the trial stalled. Causes were
+  non-idempotent joins (a refresh / rescanned QR / backgrounded tab / wifi hop
+  minted a NEW slot each time) plus a count frozen from a one-shot snapshot at
+  Start. Fixes:
+    - Idempotent join: a stable client id is kept in localStorage and REUSED,
+      so a reconnecting phone re-attaches to its existing slot instead of
+      spawning a new one.
+    - Presence flag per slot (online true/false via onDisconnect) — slots are
+      no longer deleted on disconnect, they're greyed. Start drops any slot
+      that isn't currently online BEFORE the count is baked.
+    - Debounced Join button (no double-tap dupes).
+    - Tester board in the lobby: students tap "Test my signal", their neuron
+      flashes on the tutor screen (like a keyboard tester). Dark rows are
+      phantoms — the tutor removes them with the row's ✕ before starting.
+    - Mid-run "Skip current neuron" safety net for the rare stall.
+  ============================================================================
 -->
 <!DOCTYPE html>
 <html lang="en-AU">
@@ -39,7 +57,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Neural Relay</title>
-
 <!-- ==== PASTE YOUR FIREBASE CONFIG HERE ================================= -->
 <script>
   const firebaseConfig = {
@@ -51,11 +68,9 @@
   };
 </script>
 <!-- ===================================================================== -->
-
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-
 <style>
   :root{
     --ink:#0d1b2a;          /* deep axon navy */
@@ -107,6 +122,7 @@
     padding:15px 18px;cursor:pointer;width:100%;transition:transform .05s ease, filter .15s ease;
   }
   button:active{transform:translateY(1px)}
+  button:disabled{filter:grayscale(.5) opacity(.6);cursor:default}
   .btn-primary{background:var(--ink);color:#fff}
   .btn-signal{background:var(--signal);color:#fff}
   .btn-ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
@@ -116,14 +132,12 @@
   .hidden{display:none!important}
   .note{font-size:.8rem;color:var(--muted);line-height:1.5}
   .err{color:var(--bad);font-weight:600;font-size:.9rem;margin-top:8px}
-
   /* room code display (tutor) */
   .roomcode{font-size:2.6rem;font-weight:900;letter-spacing:.35em;text-align:center;
     color:var(--signal-deep);padding:6px 0 2px;margin-left:.35em}
   .joinurl{text-align:center;color:var(--muted);font-size:.82rem;word-break:break-all;margin-top:4px}
   #qr{display:flex;justify-content:center;margin:14px 0 4px}
   #qr img,#qr canvas{border-radius:10px}
-
   /* participant / neuron chain */
   .chain{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
   .neuron{
@@ -135,10 +149,26 @@
   .neuron.active{background:var(--fire);color:#fff;border-color:var(--fire-deep);
     box-shadow:0 0 0 4px rgba(255,93,59,.25);animation:throb .9s ease-in-out infinite}
   @keyframes throb{50%{box-shadow:0 0 0 9px rgba(255,93,59,0)}}
-  .roster{display:flex;flex-direction:column;gap:2px;margin-top:10px;max-height:220px;overflow:auto}
-  .roster .row{display:flex;justify-content:space-between;font-size:.9rem;padding:6px 2px;border-bottom:1px solid #eef1f6}
-  .roster .row .rt{font-variant-numeric:tabular-nums;color:var(--muted);font-weight:700}
-
+  /* tutor lobby tester board */
+  .rosterinfo{font-size:.82rem;color:var(--muted);font-weight:700;margin:6px 0 4px}
+  #tRoster{display:flex;flex-direction:column;gap:5px;margin:8px 0 14px;max-height:260px;overflow:auto}
+  .rrow{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px;
+    padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:#fff}
+  .rrow.flash{animation:rflash .8s ease}
+  @keyframes rflash{
+    0%{background:rgba(0,180,166,.4);box-shadow:0 0 0 4px rgba(0,180,166,.35)}
+    100%{background:#fff;box-shadow:none}}
+  .rdot{width:12px;height:12px;border-radius:50%;flex:none}
+  .rdot.on{background:var(--good);box-shadow:0 0 0 3px rgba(26,158,95,.18)}
+  .rdot.off{background:var(--spent)}
+  .rname{font-weight:700;font-size:.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rstat{font-size:.74rem;font-weight:800;letter-spacing:.02em;white-space:nowrap}
+  .rstat.tested{color:var(--good)}
+  .rstat.conn{color:var(--muted)}
+  .rstat.drop{color:var(--bad)}
+  .rdrop{width:auto;padding:7px 12px;font-size:.95rem;background:transparent;
+    border:1.5px solid var(--line);color:var(--muted);border-radius:9px}
+  .rdrop:hover{border-color:var(--bad);color:var(--bad)}
   /* the big student states */
   .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;min-height:52vh}
   .waitbig{font-size:1.1rem;color:var(--muted);font-weight:600;line-height:1.5}
@@ -146,6 +176,7 @@
     color:var(--signal-deep);background:rgba(0,180,166,.12);padding:6px 12px;border-radius:999px}
   .dualnote{background:rgba(255,93,59,.12);color:var(--fire-deep);font-weight:800;font-size:.9rem;
     padding:9px 16px;border-radius:12px;line-height:1.35}
+  .testbtn{width:min(72vw,270px)}
   .serial-instr{font-size:1.05rem;font-weight:700;color:var(--muted)}
   .serial-num{font-size:4.2rem;font-weight:900;line-height:1;color:var(--ink);font-variant-numeric:tabular-nums;margin:2px 0 8px}
   .serial-in{width:min(62vw,230px);font-size:2rem;text-align:center;padding:12px;border:2px solid var(--line);
@@ -188,14 +219,13 @@
   .prompt b{color:var(--ink)}
   .youdone{font-size:1.05rem;color:var(--muted);line-height:1.6}
   .youdone .big{font-size:2.6rem;font-weight:900;color:var(--good);display:block;font-variant-numeric:tabular-nums}
-
+  .youdone .sub{font-size:1rem;color:var(--muted);display:block;margin-top:2px}
   /* results */
   .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:4px 0 14px}
   .stat{background:#f7f9fc;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
   .stat .v{font-size:1.6rem;font-weight:900;font-variant-numeric:tabular-nums}
   .stat .k{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-top:2px}
   .footnote{font-size:.78rem;color:var(--muted);line-height:1.5;margin-top:12px;border-top:1px dashed var(--line);padding-top:12px}
-
   /* bar charts */
   .chart-title{font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px}
   .bars{display:flex;flex-direction:column;gap:6px}
@@ -220,7 +250,6 @@
       <small>Brain &amp; Behaviour · Lab 2</small>
     </div>
   </header>
-
   <!-- ===================== LANDING ===================== -->
   <section id="landing" class="card">
     <h2>Send a signal round the room</h2>
@@ -231,7 +260,6 @@
     </div>
     <p id="cfgWarn" class="err hidden">⚠ Firebase config hasn't been filled in yet — see the setup comment at the top of this file.</p>
   </section>
-
   <!-- ===================== STUDENT: JOIN ===================== -->
   <section id="join" class="card hidden">
     <h2>Join the relay</h2>
@@ -240,13 +268,12 @@
     <label for="nameInput">Your name</label>
     <input id="nameInput" maxlength="24" autocomplete="off" placeholder="e.g. Sam">
     <div style="height:14px"></div>
-    <button class="btn-signal" onclick="doJoin()">Join</button>
+    <button class="btn-signal" id="joinBtn" onclick="doJoin()">Join</button>
     <p id="joinErr" class="err hidden"></p>
     <p class="note" style="text-align:center;margin-top:18px">
       Running the class? <a href="#" onclick="showTutor();return false;" style="color:var(--signal-deep);font-weight:700;text-decoration:none">Start a room →</a>
     </p>
   </section>
-
   <!-- ===================== STUDENT: PLAY ===================== -->
   <section id="play" class="card hidden" style="flex:1;display:flex;flex-direction:column">
     <div class="stage" id="playStage"></div>
@@ -255,52 +282,43 @@
       <p class="note" id="playProgress" style="text-align:center;margin-top:10px"></p>
     </div>
   </section>
-
   <!-- ===================== TUTOR: CONSOLE ===================== -->
   <section id="tutor" class="card hidden">
     <h2>Room <span id="tRoom" style="color:var(--signal-deep)"></span></h2>
-
     <div id="tLobby">
       <div class="roomcode" id="tCode">————</div>
       <div id="qr"></div>
       <div class="joinurl" id="tUrl"></div>
-
       <label style="margin-top:18px">Task</label>
       <select id="taskSelect"></select>
       <p class="note" id="taskHint" style="margin:8px 0 0"></p>
-
-      <p class="note" style="margin:14px 0 12px">Waiting for students to join. They can also scan the code above.</p>
-      <button class="btn-signal" id="startBtn" onclick="startRelay()" disabled>Start relay (0 joined)</button>
+      <p class="note" style="margin:16px 0 6px">Ask everyone to tap <b>Test my signal</b> on their phone — each live phone flashes below. Remove any row that stays dark (a phantom) with its ✕, then start.</p>
+      <div class="rosterinfo" id="tRosterInfo">No one has joined yet.</div>
+      <div id="tRoster"></div>
+      <button class="btn-signal" id="startBtn" onclick="startRelay()" disabled>Start relay (0 online)</button>
     </div>
-
     <div id="tRunning" class="hidden">
       <p class="lead" id="tRunLabel"></p>
       <div class="chain" id="tChain"></div>
       <p class="note" id="tRunProgress" style="text-align:center;margin-top:12px"></p>
+      <button class="btn-ghost" id="skipBtn" style="margin-top:14px" onclick="skipCurrent()">Skip current neuron →</button>
+      <p class="note" style="text-align:center;margin-top:8px">Use only if the chain is stuck on someone who's gone — it jumps the pulse to the next person.</p>
     </div>
-
     <div id="tResults" class="hidden">
       <p class="lead" id="tResLabel" style="margin-bottom:2px">Results</p>
       <p class="note" id="tResLatest" style="margin:0 0 16px"></p>
-
       <div class="chart-title">Total Reaction Time</div>
       <div id="chartTotal" class="bars"></div>
-
       <div class="chart-title" style="margin-top:16px">Average Reaction Time</div>
       <div id="chartAvg" class="bars"></div>
-
       <div id="talkpoints"></div>
-
       <button class="btn-signal" id="advanceBtn" style="margin-top:16px" onclick="downloadAndNext()">Next task →</button>
       <button class="btn-ghost" style="margin-top:10px" onclick="resetAll()">Reset all (new class)</button>
     </div>
   </section>
 </div>
-
 <div id="credit" style="display:none;text-align:center;font-size:.72rem;color:var(--muted);padding:12px 0 6px;letter-spacing:.02em">developed for Emily Corti</div>
-
 <audio id="beep" preload="auto"></audio>
-
 <script>
 /* ------------------------------------------------------------------ */
 /* boot + config check                                                */
@@ -314,7 +332,6 @@ try {
   }
 } catch(e){ console.error(e); }
 if (!ok) document.getElementById('cfgWarn').classList.remove('hidden');
-
 /* ------------------------------------------------------------------ */
 /* tiny helpers                                                        */
 /* ------------------------------------------------------------------ */
@@ -334,7 +351,16 @@ function showJoin(){
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no confusable chars
 const rid = (n=4)=>Array.from({length:n},()=>LETTERS[Math.floor(Math.random()*LETTERS.length)]).join('');
 const ms = n => Math.round(n) + ' ms';
-
+/* stable per-browser client id, kept across reloads so a refresh / rescan /
+   backgrounded-then-reloaded tab RE-ATTACHES to the same slot instead of
+   spawning a phantom. Falls back to an ephemeral id in private mode. */
+function getOrMakeCid(){
+  try{
+    let c = localStorage.getItem('nr_cid');
+    if(!c){ c = rid(10); localStorage.setItem('nr_cid', c); }
+    return c;
+  }catch(e){ return rid(10); }
+}
 /* GO cue via WebAudio (no audio file needed).
    Loud + sharp + broadband so it punches through cheap phone speakers and is
    fast to DETECT: a white-noise transient (near-instant onset) layered under a
@@ -349,7 +375,6 @@ function playCue(type){
     if(actx.state==='suspended') actx.resume();   // needed so iOS will actually play it
     const t = actx.currentTime;
     const master = actx.createGain(); master.gain.value = 1.0; master.connect(actx.destination);
-
     const noiseBurst = (dur, peak) => {
       const buf = actx.createBuffer(1, Math.max(1, actx.sampleRate*dur), actx.sampleRate);
       const d = buf.getChannelData(0);
@@ -381,7 +406,6 @@ function playCue(type){
       }
       const conv = actx.createConvolver(); conv.buffer = ir;
       const wet = actx.createGain(); wet.gain.value = .9; conv.connect(wet); wet.connect(master);
-
       noiseBurst(.006,.5);   // strike stays dry — keeps the onset sharp for RT
       // longer decays = more resonant ring; partials feed BOTH the dry out and the reverb
       [[1900,.5,.9],[3200,.42,.75],[4600,.22,.5]].forEach(([f,peak,dec])=>{
@@ -393,7 +417,6 @@ function playCue(type){
         o.connect(g); g.connect(master); g.connect(conv); o.start(t); o.stop(t+dec+.02);
       });
     };
-
     switch(type){
       case 'click':  noiseBurst(.03,.9); break;
       case 'noise':  noiseBurst(.12,.9); break;
@@ -410,7 +433,6 @@ function playCue(type){
 function blip(){ playCue(); }
 /* lobby test button: plays the cue AND unlocks audio for the rest of the session */
 function testSound(){ blip(); }
-
 /* Wake the audio hardware on the FIRST user gesture (e.g. joining the room), so the
    first real cue is already at full volume. Without this, iOS/Chrome fade in the first
    sound after silence — which is why the first clap was soft and the rest were fine.
@@ -427,7 +449,6 @@ function unlockAudio(){
   }catch(e){}
 }
 window.addEventListener('pointerdown', unlockAudio);
-
 /* ------------------------------------------------------------------ */
 /* the five tasks                                                      */
 /* ------------------------------------------------------------------ */
@@ -445,7 +466,6 @@ const TASKS = [
 ];
 const taskById = id => TASKS.find(t=>t.id===id) || TASKS[0];
 const taskN    = id => TASKS.findIndex(t=>t.id===id)+1;
-
 function buildTaskMenu(){
   const sel=$('taskSelect');
   sel.innerHTML = TASKS.map((t,i)=>`<option value="${t.id}">${i+1}. ${t.label}</option>`).join('');
@@ -455,12 +475,10 @@ function buildTaskMenu(){
   };
   sel.onchange();
 }
-
 /* ================================================================== */
 /* TUTOR SIDE                                                          */
 /* ================================================================== */
 let room = null, tutorRef = null;
-
 function createRoom(){
   room = rid();
   tutorRef = db.ref('s/'+room);
@@ -470,33 +488,63 @@ function createRoom(){
   });
   // auto-cleanup if the tutor closes the tab in lobby
   tutorRef.child('meta/state').onDisconnect().remove();
-
   only('tutor');
   $('tRoom').textContent = room;
   $('tCode').textContent = room;
   show('tLobby'); hide('tRunning'); hide('tResults');
-
   const url = location.origin + location.pathname + '?room=' + room;
   $('tUrl').textContent = url;
   $('qr').innerHTML='';
   try{ new QRCode($('qr'),{text:url,width:150,height:150,colorDark:'#0d1b2a'}); }catch(e){}
-
   buildTaskMenu();
-
-  // live roster -> update start button + lobby chain (count present participants)
+  // live meta + history
   tutorRef.child('meta').on('value', s=>{ tutorRender(s.val()||{}); });
   tutorRef.child('history').on('value', s=>{ HIST = s.val()||{}; if(lastMeta.state==='done') renderResults(lastMeta); });
+  // live roster -> tester board + start button (count PRESENT/online participants)
   tutorRef.child('p').on('value', s=>{
     TP = s.val()||{};
-    const n = Object.keys(TP).length;
+    renderRoster();
+    const online = Object.values(TP).filter(p=>p&&p.online===true).length;
     const btn=$('startBtn');
-    btn.disabled = n<2;
-    btn.textContent = n<2 ? `Start relay (${n} joined)` : `Start relay (${n} joined) →`;
-    tutorRender(lastMeta);
+    btn.disabled = online<2;
+    btn.textContent = online<2 ? `Start relay (${online} online)` : `Start relay (${online} online) →`;
+    if(lastMeta.state==='running') tutorRender(lastMeta); // refresh skip-button label with current name
   });
 }
-
-let TP={}, lastMeta={}, HIST={}, recorded={};
+let TP={}, lastMeta={}, HIST={}, recorded={}, pingSeen={};
+/* --- tutor lobby tester board --- */
+function renderRoster(){
+  const el=$('tRoster'); if(!el) return;
+  const arr = Object.keys(TP).map(k=>({pos:+k,...TP[k]})).sort((a,b)=>a.pos-b.pos);
+  const info=$('tRosterInfo');
+  if(!arr.length){ el.innerHTML=''; if(info) info.textContent='No one has joined yet.'; return; }
+  let online=0, tested=0;
+  el.innerHTML='';
+  arr.forEach(p=>{
+    const isOn = p.online===true; if(isOn) online++;
+    if(p.tested) tested++;
+    const fresh = (p.testPing && p.testPing > (pingSeen[p.pos]||0));
+    if(p.testPing) pingSeen[p.pos] = p.testPing;
+    const statTxt = p.tested ? 'tested ✓' : (isOn ? 'connected' : 'dropped');
+    const statCls = p.tested ? 'tested' : (isOn ? 'conn' : 'drop');
+    const row=document.createElement('div');
+    row.className='rrow'+(fresh?' flash':'');
+    row.innerHTML =
+      `<span class="rdot ${isOn?'on':'off'}"></span>
+       <span class="rname"></span>
+       <span class="rstat ${statCls}">${statTxt}</span>
+       <button class="rdrop" title="Remove" onclick="removeNeuron(${p.pos})">✕</button>`;
+    row.querySelector('.rname').textContent = p.name || '(no name)';
+    el.appendChild(row);
+  });
+  if(info) info.textContent = `${arr.length} joined · ${online} online · ${tested} tested`;
+}
+function removeNeuron(pos){
+  if(!tutorRef) return;
+  const nm = (TP[pos]&&TP[pos].name)||('neuron #'+(pos+1));
+  if(!confirm(`Remove ${nm}? If they're actually present they can rejoin by refreshing.`)) return;
+  tutorRef.child('p/'+pos).remove();
+}
 function tutorRender(meta){
   lastMeta = meta||{};
   const st = meta.state;
@@ -506,24 +554,38 @@ function tutorRender(meta){
     renderChain($('tChain'), meta, TP);
     const done = Math.min(meta.currentTurn, meta.count);
     $('tRunProgress').textContent = `${done} of ${meta.count} fired`;
+    const skip=$('skipBtn');
+    if(skip){
+      const curName = (TP[meta.currentTurn] && TP[meta.currentTurn].name) || ('#'+((meta.currentTurn||0)+1));
+      skip.textContent = `Skip current neuron (#${(meta.currentTurn||0)+1} · ${curName}) →`;
+    }
   } else if(st==='done'){
     hide('tLobby'); hide('tRunning'); show('tResults');
     maybeRecord(meta);
     renderResults(meta);
+  } else { // lobby
+    show('tLobby'); hide('tRunning'); hide('tResults');
   }
 }
-
 function startRelay(){
   const task = taskById($('taskSelect').value);
   tutorRef.child('p').once('value').then(s=>{
     const raw = s.val()||{};
-    // compact present participants into contiguous 0..k-1 (preserve join order),
-    // so any lobby drop-outs don't leave a gap that stalls the chain
-    const entries = Object.keys(raw).map(k=>({pos:+k, ...raw[k]})).sort((a,b)=>a.pos-b.pos);
+    // PRESENCE FILTER: keep only slots whose holder is currently online, THEN
+    // compact into contiguous 0..k-1 (preserve join order). This drops phantoms
+    // and lobby drop-outs before the count is baked, so the chain can't stall on
+    // a dead slot. (Also sidesteps the old onDisconnect-path race, since we no
+    // longer delete slots on disconnect at all — we just don't count offline ones.)
+    const entries = Object.keys(raw).map(k=>({pos:+k, ...raw[k]}))
+      .filter(e=> e && e.online===true)
+      .sort((a,b)=>a.pos-b.pos);
     const count = entries.length;
-    if(count<2) return;
+    if(count<2){ alert('Need at least 2 online neurons to start. Ask everyone to tap "Test my signal" and remove any dark rows.'); return; }
     const newP = {};
-    entries.forEach((e,i)=>{ newP[i] = {cid:e.cid||'', name:e.name||'', reactionMs:null, tappedAt:null}; });
+    entries.forEach((e,i)=>{ newP[i] = {
+      cid:e.cid||'', name:e.name||'', online:true, tested:!!e.tested,
+      reactionMs:null, tappedAt:null, skipped:false, testPing:null
+    }; });
     tutorRef.child('meta/state').onDisconnect().cancel(); // don't nuke a live run
     tutorRef.child('p').set(newP).then(()=>{
       tutorRef.child('meta').update({
@@ -537,12 +599,30 @@ function startRelay(){
     });
   });
 }
-
+/* mid-run safety net: jump the pulse past a neuron that's gone. Marks the slot
+   skipped so recording doesn't wait forever for a reaction that'll never land. */
+function skipCurrent(){
+  if(lastMeta.state!=='running' || !tutorRef) return;
+  const cur = lastMeta.currentTurn||0;
+  const nm = (TP[cur]&&TP[cur].name)||('#'+(cur+1));
+  if(!confirm(`Skip neuron #${cur+1} (${nm})? The relay jumps to the next person and this one is left out of the results.`)) return;
+  tutorRef.child('p/'+cur+'/skipped').set(true);
+  tutorRef.child('meta/currentTurn').transaction(c=> (c===cur ? c+1 : c)).then(res=>{
+    if(res.committed && res.snapshot.val() >= (lastMeta.count||0)){
+      tutorRef.child('meta').update({state:'done', finishedAt:firebase.database.ServerValue.TIMESTAMP});
+    }
+  });
+}
 function newRound(){
   const doneId = lastMeta.taskId;
-  // keep participants, clear their taps, back to lobby with same code (history is preserved)
+  // keep participants, clear their taps/skips, back to lobby with same code (history preserved)
   const updates={};
-  Object.keys(TP).forEach(k=>{ updates['p/'+k+'/reactionMs']=null; updates['p/'+k+'/tappedAt']=null; });
+  Object.keys(TP).forEach(k=>{
+    updates['p/'+k+'/reactionMs']=null;
+    updates['p/'+k+'/tappedAt']=null;
+    updates['p/'+k+'/skipped']=null;
+    updates['p/'+k+'/testPing']=null;
+  });
   tutorRef.update(updates);
   tutorRef.child('meta').update({state:'lobby',currentTurn:0,startedAt:0,finishedAt:0});
   // auto-advance the picker to the next task in the sequence
@@ -550,19 +630,20 @@ function newRound(){
   if(idx>=0 && idx+1<TASKS.length){ $('taskSelect').value = TASKS[idx+1].id; $('taskSelect').onchange(); }
   show('tLobby'); hide('tRunning'); hide('tResults');
 }
-
 function resetAll(){
   if(tutorRef) tutorRef.remove();
   location.href = location.origin + location.pathname + '?tutor';
 }
-
 /* --- record a finished task into the cross-task history --- */
 function partArray(P){ return Object.keys(P||{}).map(k=>({pos:+k,...P[k]})).sort((a,b)=>a.pos-b.pos); }
 function maybeRecord(meta){
   if(!meta.taskId || recorded[meta.startedAt]) return;
   const arr = partArray(TP);
   const rts = arr.filter(x=>typeof x.reactionMs==='number');
-  if(rts.length < meta.count) return;                 // wait for stragglers to sync in
+  const skipped = arr.filter(x=>x.skipped===true).length;
+  // "resolved" = reacted OR skipped by the tutor. Wait until everyone's resolved
+  // so a straggler still syncing doesn't get dropped — but a skip no longer stalls.
+  if(rts.length + skipped < meta.count) return;
   recorded[meta.startedAt] = true;
   const sum = rts.reduce((a,b)=>a+b.reactionMs,0);
   const parts = {};
@@ -573,7 +654,7 @@ function maybeRecord(meta){
     label: meta.roundLabel||t.label,
     short: t.short,
     mode: meta.mode||'simple',
-    count: rts.length,
+    count: rts.length,                                  // people who actually reacted
     neuralTotal: sum,
     avg: rts.length ? Math.round(sum/rts.length) : 0,
     wallMs: (meta.finishedAt&&meta.startedAt) ? meta.finishedAt-meta.startedAt : 0,
@@ -581,7 +662,6 @@ function maybeRecord(meta){
     participants: parts
   });
 }
-
 /* --- results: latest line + two bar charts + talking points --- */
 function renderResults(meta){
   const hist = Object.values(HIST||{}).sort((a,b)=>a.order-b.order);
@@ -596,14 +676,12 @@ function renderResults(meta){
   const hasNext = idx>=0 && idx+1<TASKS.length;
   $('advanceBtn').textContent = hasNext ? 'Next task →' : '⤓ Download results (finish)';
 }
-
 function downloadAndNext(){
   const idx = lastMeta.taskId ? TASKS.findIndex(t=>t.id===lastMeta.taskId) : -1;
   const hasNext = idx>=0 && idx+1<TASKS.length;
   if(hasNext) newRound();      // mid-sequence: just move on (data's already saved in the DB)
   else downloadXLSX();         // last task: force the spreadsheet download
 }
-
 const TASK_COLORS = {1:'#00b4a6', 2:'#3b82f6', 3:'#8b5cf6', 4:'#f59e0b', 5:'#ef4444'};
 function renderBars(el, hist, key, unit){
   if(!hist.length){ el.innerHTML='<div class="bar-empty">No tasks recorded yet.</div>'; return; }
@@ -620,7 +698,6 @@ function renderBars(el, hist, key, unit){
     el.appendChild(row);
   });
 }
-
 function phraseDelta(aAvg,bAvg){          // b relative to a
   const d = Math.round(bAvg-aAvg);
   if(d>0) return `${d} ms slower`;
@@ -643,7 +720,6 @@ function renderTalk(meta){
     pts.map((p,i)=>`<p><b>Task ${i+1} (${p.title}):</b> ${p.body}</p>`).join('')
   }</div>`;
 }
-
 function loadScript(src){
   return new Promise((res,rej)=>{
     const s=document.createElement('script'); s.src=src;
@@ -657,7 +733,6 @@ async function ensureExcel(){
   if(!excelLoading) excelLoading = loadScript('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js');
   await excelLoading;
 }
-
 async function downloadXLSX(){
   const hist = Object.values(HIST||{}).sort((a,b)=>a.order-b.order);
   if(!hist.length){ alert('No data yet — run at least one task first.'); return; }
@@ -686,7 +761,6 @@ async function downloadXLSX(){
       rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF00B4A6'}}] });
     ws.addConditionalFormatting({ ref:`E2:E${last}`,
       rules:[{type:'dataBar', cfvo:[{type:'min'},{type:'max'}], color:{argb:'FF3A63C9'}}] });
-
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const a = document.createElement('a');
@@ -700,81 +774,136 @@ async function downloadXLSX(){
     if(btn){ btn.disabled=false; btn.textContent=old; }
   }
 }
-
 /* ================================================================== */
 /* STUDENT SIDE                                                        */
 /* ================================================================== */
 let myRoom=null, myPos=null, myCid=null, myRef=null, meta={}, PP={};
 let shownAt=0, iAmActive=false, awaitingChoice=null;
-
+let joining=false, presencePath=null;
 function doJoin(){
+  if(joining) return;                       // debounce: ignore double-taps
   const code=$('roomInput').value.trim().toUpperCase();
   const name=$('nameInput').value.trim();
   $('joinErr').classList.add('hidden');
   if(code.length!==4) return joinErr('Enter the 4-letter room code.');
   if(!name) return joinErr('Enter your name.');
-
+  joining=true; const jb=$('joinBtn'); if(jb){ jb.disabled=true; jb.textContent='Joining…'; }
+  const done = ()=>{ joining=false; if(jb){ jb.disabled=false; jb.textContent='Join'; } };
   const ref=db.ref('s/'+code);
+  myCid = getOrMakeCid();
   ref.child('meta').once('value').then(s=>{
     const m=s.val();
-    if(!m) return joinErr("Can't find that room — check the code.");
-    if(m.state!=='lobby') return joinErr('That relay has already started. Ask your tutor to start a new round.');
-    // grab a stable position via a counter transaction
-    return ref.child('joinCounter').transaction(c=>(c||0)+1).then(res=>{
-      const pos=res.snapshot.val()-1;
-      myRoom=code; myPos=pos; myRef=ref; myCid=rid(8);
-      const pref=ref.child('p/'+pos);
-      pref.set({cid:myCid, name, reactionMs:null, tappedAt:null});
-      pref.onDisconnect().remove(); // drop out cleanly if they leave before start
-      subscribePlay();
-      only('play');
+    if(!m){ done(); return joinErr("Can't find that room — check the code."); }
+    if(m.state!=='lobby'){ done(); return joinErr('That relay has already started. Ask your tutor to start a new round.'); }
+    // IDEMPOTENT JOIN: reuse an existing slot with my cid instead of minting a new one
+    return ref.child('p').once('value').then(ps=>{
+      const P = ps.val()||{};
+      let existing = null;
+      for(const k in P){ if(P[k] && P[k].cid===myCid){ existing=+k; break; } }
+      if(existing!=null){
+        myRoom=code; myPos=existing; myRef=ref;
+        ref.child('p/'+existing).update({name, reactionMs:null, tappedAt:null, skipped:null});
+        attachPresence();
+        subscribePlay();
+        only('play');
+        return;
+      }
+      // no slot yet -> take a fresh position via the counter
+      return ref.child('joinCounter').transaction(c=>(c||0)+1).then(res=>{
+        const pos=res.snapshot.val()-1;
+        myRoom=code; myPos=pos; myRef=ref;
+        ref.child('p/'+pos).set({cid:myCid, name, reactionMs:null, tappedAt:null,
+                                 online:true, tested:false, testPing:null,
+                                 lastSeen:firebase.database.ServerValue.TIMESTAMP});
+        attachPresence();
+        subscribePlay();
+        only('play');
+      });
     });
-  }).catch(e=>{ console.error(e); joinErr('Something went wrong joining.'); });
+  }).catch(e=>{ console.error(e); done(); joinErr('Something went wrong joining.'); });
 }
 function joinErr(msg){ const e=$('joinErr'); e.textContent=msg; e.classList.remove('hidden'); }
-
+/* PRESENCE: mark our slot online, and arrange to flip it offline on disconnect.
+   We never DELETE the slot on disconnect (that's what caused the compaction-path
+   race and the vanishing rows) — Start just doesn't count offline slots. */
+function attachPresence(){
+  const conn = db.ref('.info/connected');
+  conn.on('value', s=>{
+    if(s.val()===true){ presencePath=null; armPresence(); } // re-register onDisconnect on every (re)connect
+  });
+  armPresence();
+}
+function armPresence(){
+  if(!myRef || myPos==null) return;
+  const path = 'p/'+myPos+'/online';
+  if(presencePath && presencePath!==path){ try{ myRef.child(presencePath).onDisconnect().cancel(); }catch(e){} }
+  presencePath = path;
+  try{ myRef.child(path).onDisconnect().set(false); }catch(e){}
+  myRef.child('p/'+myPos).update({online:true, lastSeen:firebase.database.ServerValue.TIMESTAMP});
+}
+/* student tester: lights up our neuron on the tutor board AND doubles as the
+   sound check (plays the cue + unlocks audio, so the auditory round is primed). */
+function testerPing(){
+  unlockAudio(); blip();
+  if(myRef && myPos!=null){
+    myRef.child('p/'+myPos).update({
+      tested:true,
+      testPing:firebase.database.ServerValue.TIMESTAMP,
+      online:true,
+      lastSeen:firebase.database.ServerValue.TIMESTAMP
+    });
+  }
+}
 function subscribePlay(){
   myRef.child('meta').on('value', s=>{ meta=s.val()||{}; renderPlay(); });
   myRef.child('p').on('value', s=>{
     PP=s.val()||{};
-    // re-find our own slot by client id (positions get compacted at start)
-    for(const k in PP){ if(PP[k] && PP[k].cid===myCid){ myPos=+k; break; } }
+    // re-find our own slot by client id (positions get compacted at start) and
+    // re-arm presence on the new path if our position moved.
+    let found=null;
+    for(const k in PP){ if(PP[k] && PP[k].cid===myCid){ found=+k; break; } }
+    if(found!=null){ if(found!==myPos){ myPos=found; armPresence(); } }
     renderPlay();
   });
-  // arm clean drop-out in the lobby; cancel it once the chain is live
-  myRef.child('meta/state').on('value', s=>{
-    const st=s.val();
-    if(!myRef || myPos==null) return;
-    if(st==='running') myRef.child('p/'+myPos).onDisconnect().cancel();
-    else if(st==='lobby') myRef.child('p/'+myPos).onDisconnect().remove();
-  });
 }
-
 function renderPlay(){
   const stage=$('playStage');
   const hideChain = meta.state==='running' && meta.hideChain;
   const progEl=$('playProgress');
   if(hideChain){ $('playChain').innerHTML=''; progEl.textContent=''; }
   else renderChain($('playChain'), meta, PP);
-
+  // removed by the tutor (our cid is no longer in the roster)
+  if((meta.state==='lobby'||meta.state==='running') && myPos!=null &&
+     PP && Object.keys(PP).length && !PP[myPos]){
+    iAmActive=false;
+    stage.innerHTML = `<div class="waitbig">You're not in the current roster.<br>Refresh this page to rejoin.</div>`;
+    progEl.textContent='';
+    return;
+  }
   if(meta.state==='lobby'){
     iAmActive=false;
     const soundNext = meta.pendingTask==='base2';
+    const tested = PP[myPos] && PP[myPos].tested;
     stage.innerHTML =
       `<div class="position-badge">You're neuron #${myPos+1}</div>
-       <div class="waitbig">Locked in.<br>Waiting for your tutor to fire the first signal…</div>
-       ${soundNext ? `<div class="dualnote">🔊 Next round uses SOUND. Unmute your phone and turn the volume up — just for this round, you can silence it again straight after. Test it below 👇</div>
-       <button class="btn-ghost soundtest" onclick="testSound()">🔊 Test sound</button>` : ''}`;
-    progEl.textContent = (meta.count||countP())+' ready';
+       <div class="waitbig">Locked in.<br>Tap below so your tutor can see your light, then wait for the first signal…</div>
+       <button class="btn-signal testbtn" onclick="testerPing()">⚡ Test my signal${tested?' ✓':''}</button>
+       ${soundNext ? `<div class="dualnote">🔊 Next round uses SOUND. Unmute your phone and turn the volume up — just for this round, you can silence it again straight after. The test button above also plays the cue 👆</div>` : ''}`;
+    progEl.textContent = countOnline()+' online';
     return;
   }
   if(meta.state==='running'){
     const turn=meta.currentTurn;
     const done=Math.min(turn,meta.count);
     if(!hideChain) progEl.textContent = `${done} of ${meta.count} fired`;
+    // skipped by the tutor this round
+    if(PP[myPos] && PP[myPos].skipped){
+      iAmActive=false;
+      stage.innerHTML = `<div class="youdone">Skipped for this round ↷<span class="sub">the relay moved on without you</span></div>`;
+      return;
+    }
     const isSound = meta.mode==='sound';
     const noteHtml = meta.note ? `<div class="dualnote">${esc(meta.note)}</div>` : '';
-
     if(myHasFired()){
       iAmActive=false;
       const my=PP[myPos]?.reactionMs;
@@ -810,7 +939,6 @@ function renderPlay(){
     progEl.textContent = 'Look up at the projector for the class results.';
   }
 }
-
 function goActive(){
   iAmActive=true;
   blip();
@@ -849,7 +977,6 @@ function goActive(){
       `<div class="tapzone" onclick="fire()">TAP<small>your turn — go!</small></div>`;
   }
 }
-
 function choose(side){
   if(!iAmActive) return;
   if(side!==awaitingChoice){
@@ -859,7 +986,6 @@ function choose(side){
   }
   fire();
 }
-
 function serialSubmit(){
   if(!iAmActive) return;
   const el=$('serialInput'); if(!el) return;
@@ -873,7 +999,6 @@ function serialSubmit(){
   }
   fire();
 }
-
 function fire(){
   if(!iAmActive) return;
   iAmActive=false;
@@ -895,10 +1020,9 @@ function fire(){
     }
   });
 }
-
 function myHasFired(){ return PP[myPos] && typeof PP[myPos].reactionMs==='number'; }
 function countP(){ return Object.keys(PP).length; }
-
+function countOnline(){ return Object.values(PP).filter(p=>p&&p.online===true).length; }
 /* ================================================================== */
 /* shared: the neuron chain visual                                    */
 /* ================================================================== */
@@ -917,9 +1041,7 @@ function renderChain(el, meta, P){
     el.appendChild(d);
   }
 }
-
 function esc(s){ return (s+'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
-
 /* landing routing:
    - ...index.html?tutor  -> tutor console (bookmark THIS as your own link)
    - ...index.html         -> student join screen (the default)
@@ -933,3 +1055,28 @@ if(ok){
 </script>
 </body>
 </html>
+<!--
+  ============================================================================
+  SECURITY — lock your database rules before a real class link goes out
+  ============================================================================
+  Test mode leaves the whole tree world-readable and world-writable, so anyone
+  with the link (or who guesses it) can inject a slot — a genuine phantom the
+  fixes above can't fully stop. The presence filter and tester board cover the
+  accidental phantoms (refreshes, double-taps, dropped phones); locking the rules
+  covers the deliberate ones. In the Firebase console -> Realtime Database ->
+  Rules, a pragmatic middle ground for a one-off class (no auth) is to at least
+  scope writes to the session tree and cap sizes, e.g.:
+
+    { "rules": {
+        "s": { "$room": {
+          ".read": true,
+          ".write": true,
+          "p": { "$pos": { ".validate": "newData.hasChildren(['cid'])" } }
+        } }
+    } }
+
+  That's still open, just structured. For anything beyond a single lab you'd add
+  Firebase Anonymous Auth and gate ".write" on "auth != null". Either way, don't
+  leave it in raw test mode on a public Pages URL.
+  ============================================================================
+-->
